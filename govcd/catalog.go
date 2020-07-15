@@ -18,6 +18,7 @@ import (
 	"path"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/vmware/go-vcloud-director/v2/types/v56"
@@ -129,14 +130,26 @@ func (cat *Catalog) UploadOvf(ovaFileName, itemName, description string, uploadP
 		}
 	}
 
-	filesAbsPaths, tmpDir, err := util.Unpack(ovaFileName)
+	isOvf := false
+	fileContentType, err := util.GetFileContentType(ovaFileName)
 	if err != nil {
-		return UploadTask{}, fmt.Errorf("%s. Unpacked files for checking are accessible in: "+tmpDir, err)
+		return UploadTask{}, err
 	}
-
-	ovfFilePath, err := getOvfPath(filesAbsPaths)
-	if err != nil {
-		return UploadTask{}, fmt.Errorf("%s. Unpacked files for checking are accessible in: "+tmpDir, err)
+	if strings.Contains(fileContentType, "text/xml") {
+		isOvf = true
+	}
+	ovfFilePath := ovaFileName
+	tmpDir := path.Dir(ovaFileName)
+	filesAbsPaths := []string{ovfFilePath}
+	if !isOvf {
+		filesAbsPaths, tmpDir, err = util.Unpack(ovaFileName)
+		if err != nil {
+			return UploadTask{}, fmt.Errorf("%s. Unpacked files for checking are accessible in: "+tmpDir, err)
+		}
+		ovfFilePath, err = getOvfPath(filesAbsPaths)
+		if err != nil {
+			return UploadTask{}, fmt.Errorf("%s. Unpacked files for checking are accessible in: "+tmpDir, err)
+		}
 	}
 
 	ovfFileDesc, err := getOvf(ovfFilePath)
@@ -144,9 +157,21 @@ func (cat *Catalog) UploadOvf(ovaFileName, itemName, description string, uploadP
 		return UploadTask{}, fmt.Errorf("%s. Unpacked files for checking are accessible in: "+tmpDir, err)
 	}
 
-	err = validateOvaContent(filesAbsPaths, &ovfFileDesc, tmpDir)
-	if err != nil {
-		return UploadTask{}, fmt.Errorf("%s. Unpacked files for checking are accessible in: "+tmpDir, err)
+	if !isOvf {
+		err = validateOvaContent(filesAbsPaths, &ovfFileDesc, tmpDir)
+		if err != nil {
+			return UploadTask{}, fmt.Errorf("%s. Unpacked files for checking are accessible in: "+tmpDir, err)
+		}
+	} else {
+		dir := path.Dir(ovfFilePath)
+		for _, fileItem := range ovfFileDesc.File {
+			dependFile := path.Join(dir, fileItem.HREF)
+			dependFile, err := validateAndFixFilePath(dependFile)
+			if err != nil {
+				return UploadTask{}, err
+			}
+			filesAbsPaths = append(filesAbsPaths, dependFile)
+		}
 	}
 
 	catalogItemUploadURL, err := findCatalogItemUploadLink(cat, "application/vnd.vmware.vcloud.uploadVAppTemplateParams+xml")
